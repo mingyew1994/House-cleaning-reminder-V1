@@ -169,7 +169,7 @@ html, body { height: 100%; overflow: hidden; background: var(--bg); color: var(-
   cursor: pointer;
   border: 1.5px solid transparent;
   transition: all .2s;
-  color: #fff;
+  color: #1a1a2e;
   box-shadow: 0 1px 4px rgba(0,0,0,.1);
 }
 .room-chip.selected { box-shadow: 0 0 0 2px #fff, 0 0 0 4px currentColor; }
@@ -609,3 +609,227 @@ input[type="range"]::-webkit-slider-thumb {
 
 #heatmap-legend { display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin-top: 8px; font-size: 10px; color: var(--text3); }
 .legend-cell { width: 10px; height: 10px; border-radius: 2px; }
+
+/* ── Toolbar divider ─────────────────────────────── */
+.toolbar-divider {
+  width: 1px;
+  background: var(--border);
+  align-self: stretch;
+  margin: 4px 2px;
+  flex-shrink: 0;
+}
+
+/* ── Clean Now mode toggle ──────────────────────── */
+#clean-mode-toggle {
+  display: flex;
+  background: var(--surface2);
+  border-radius: 12px;
+  padding: 3px;
+  gap: 3px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+}
+.clean-mode-btn {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: none;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .25s;
+  color: var(--text2);
+  background: transparent;
+}
+.clean-mode-btn.active {
+  background: var(--bg2);
+  color: var(--accent);
+  box-shadow: 0 2px 8px rgba(108,99,255,.18);
+}
+#clean-header-card p { color: var(--text2); font-size: 13px; margin-bottom: 14px; }
+#time-input-row { display: flex; align-items: flex-end; gap: 16px; margin-top: 10px; }
+
+/* ── Photo thumbnail improvements ───────────────── */
+.task-thumb { cursor: zoom-in; }
+.task-thumb-wrap { position: relative; width: 56px; height: 56px; flex-shrink: 0; }
+.task-thumb-expand {
+  position: absolute;
+  bottom: 3px; right: 3px;
+  width: 22px; height: 22px;
+  border-radius: 6px;
+  background: rgba(0,0,0,.62);
+  color: #fff;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+  line-height: 1;
+  backdrop-filter: blur(4px);
+  transition: background .2s;
+}
+.task-thumb-expand:hover { background: rgba(108,99,255,.85); }
+
+/* ── Lightbox zoom ───────────────────────────────── */
+#modal-photo-img {
+  cursor: zoom-in;
+  transition: transform .3s cubic-bezier(.25,.8,.25,1);
+  transform-origin: center center;
+}
+#modal-photo-img.zoomed { cursor: zoom-out; }
+
+/* ── Clean Now urgent card ───────────────────────── */
+.clean-task-card {
+  position: relative;
+  overflow: hidden;
+}
+.clean-task-card.urgent-card {
+  border-color: rgba(229,55,43,.25);
+  background: linear-gradient(135deg, rgba(229,55,43,.04), var(--surface));
+}
+
+/* ── Login Screen ────────────────────────────────── */
+#login-screen {
+  position: fixed;
+  inset: 0;
+  background: linear-gradient(155deg, #1a1040 0%, #2d1b69 50%, #130d30 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+#login-screen.hidden { display: none; }
+
+#login-card {
+  background: rgba(255,255,255,.07);
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 28px;
+  padding: 44px 32px 36px;
+  width: 100%;
+  max-width: 360px;
+  text-align: center;
+  backdrop-filter: blur(20px);
+  box-shadow: 0 24px 80px rgba(0,0,0,.5);
+}
+#login-logo-wrap { font-size: 60px; display: block; margin-bottom: 16px; filter: drop-shadow(0 4px 24px rgba(108,99,255,.6)); }
+#login-app-name {
+  font-size: 34px; font-weight: 800;
+  background: linear-gradient(135deg, #a78bfa, #60a5fa);
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  margin-bottom: 8px;
+}
+#login-tagline { font-size: 14px; color: rgba(255,255,255,.5); margin-bottom: 36px; line-height: 1.6; }
+
+#btn-google-signin {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  width: 100%; padding: 15px 20px;
+  background: #fff; border: none; border-radius: 14px;
+  font-family: inherit; font-size: 15px; font-weight: 600; color: #1a1a2e;
+  cursor: pointer; transition: all .2s;
+  box-shadow: 0 4px 24px rgba(0,0,0,.35);
+}
+#btn-google-signin:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(0,0,0,.45); }
+#btn-google-signin:active { transform: scale(.97); }
+.google-icon { width: 20px; height: 20px; flex-shrink: 0; }
+#login-footer { margin-top: 24px; font-size: 11px; color: rgba(255,255,255,.28); line-height: 1.6; }
+
+/* ── Loading Overlay ─────────────────────────────── */
+#loading-overlay {
+  position: fixed; inset: 0;
+  background: var(--bg);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  z-index: 999; gap: 16px;
+}
+#loading-overlay.hidden { display: none; }
+.loading-spinner {
+  width: 40px; height: 40px;
+  border: 3px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-text { font-size: 14px; color: var(--text2); font-weight: 500; }
+
+/* ── User avatar button in header ────────────────── */
+#btn-user-menu {
+  display: none;
+  align-items: center;
+  gap: 7px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 5px 12px 5px 5px;
+  cursor: pointer;
+  transition: all .2s;
+  font-family: inherit;
+}
+#btn-user-menu.visible { display: flex; }
+#btn-user-menu:hover { background: var(--bg3); }
+.user-avatar-circle {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), #8b5cf6);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: #fff; flex-shrink: 0;
+}
+.user-name-short { font-size: 12px; font-weight: 600; color: var(--text2); max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── User dropdown ───────────────────────────────── */
+#user-dropdown {
+  position: absolute;
+  top: calc(var(--header-h) + 4px); right: 12px;
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 32px rgba(0,0,0,.12);
+  z-index: 300; min-width: 210px; overflow: hidden;
+  animation: fadeIn .15s ease;
+}
+#user-dropdown.hidden { display: none; }
+.user-dropdown-header { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.user-dropdown-name { font-size: 14px; font-weight: 700; color: var(--text); }
+.user-dropdown-email { font-size: 12px; color: var(--text2); margin-top: 2px; }
+.dropdown-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px;
+  font-size: 14px; font-weight: 500; color: var(--text);
+  cursor: pointer; border: none; background: none; width: 100%;
+  font-family: inherit; text-align: left; transition: background .15s;
+}
+.dropdown-item:hover { background: var(--surface2); }
+.dropdown-item.danger { color: var(--red); }
+
+/* ── Share Modal extras ──────────────────────────── */
+#share-members-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.share-member-row { display: flex; align-items: center; gap: 10px; padding: 10px; background: var(--surface2); border-radius: var(--radius-sm); }
+.share-member-avatar {
+  width: 34px; height: 34px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), #8b5cf6);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 700; color: #fff; flex-shrink: 0;
+}
+.share-member-info { flex: 1; min-width: 0; }
+.share-member-name { font-size: 13px; font-weight: 600; color: var(--text); }
+.share-member-email { font-size: 11px; color: var(--text2); }
+.share-member-badge { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px; background: rgba(108,99,255,.12); color: var(--accent); white-space: nowrap; }
+
+/* ── Share modal action buttons ──────────────────── */
+.share-member-leave-btn {
+  font-size: 11px; font-weight: 600; padding: 4px 10px;
+  border-radius: 10px; border: 1px solid rgba(229,55,43,.3);
+  background: rgba(229,55,43,.08); color: var(--red);
+  cursor: pointer; font-family: inherit; white-space: nowrap;
+  transition: background .15s;
+}
+.share-member-leave-btn:hover { background: rgba(229,55,43,.16); }
+.share-member-remove-btn {
+  font-size: 12px; font-weight: 700; padding: 2px 7px;
+  border-radius: 8px; border: 1px solid rgba(229,55,43,.3);
+  background: rgba(229,55,43,.08); color: var(--red);
+  cursor: pointer; font-family: inherit;
+  transition: background .15s; line-height: 1.4;
+}
+.share-member-remove-btn:hover { background: rgba(229,55,43,.16); }
