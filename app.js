@@ -12,6 +12,25 @@
 
 'use strict';
 
+// ───────────────────────────────────────────────────────────────
+// 0. Firebase Init
+// ───────────────────────────────────────────────────────────────
+firebase.initializeApp({
+  apiKey: 'AIzaSyAhaaOnASWPKKWoOl_u7148jBhUB667MP8',
+  authDomain: 'home-cleaning-app-e5822.firebaseapp.com',
+  projectId: 'home-cleaning-app-e5822',
+  storageBucket: 'home-cleaning-app-e5822.firebasestorage.app',
+  messagingSenderId: '893296379379',
+  appId: '1:893296379379:web:573899cd9e018a5ee87e86',
+});
+const auth = firebase.auth();
+const db      = firebase.firestore();
+const storage = firebase.storage();
+let currentUser    = null;
+let currentHouseId = null;
+let _saveTimer     = null;
+let _unsubSnapshot = null;  // real-time listener cleanup
+
 // ─────────────────────────────────────────────────────────────
 // 1. State & Persistence
 // ─────────────────────────────────────────────────────────────
@@ -24,20 +43,45 @@ const state = {
   tasks: [],   // { id, roomId, name, durationMins, intervalDays, lastCleaned, photo }
 };
 
+// ── Sync status badge ──
+function setSyncStatus(status) {
+  // status: 'synced' | 'saving' | 'offline'
+  let el = document.getElementById('sync-status');
+  if (!el) return;
+  const map = {
+    synced:  { icon: '☁️', text: 'Synced',  color: 'var(--green)' },
+    saving:  { icon: '🔄', text: 'Saving…', color: 'var(--amber)' },
+    offline: { icon: '⚠️', text: 'Offline', color: 'var(--red)'   },
+  };
+  const s = map[status] || map.offline;
+  el.innerHTML = `<span style="font-size:11px;color:${s.color};font-weight:600;display:flex;align-items:center;gap:3px">${s.icon} ${s.text}</span>`;
+}
+
 function saveState() {
+  // localStorage as fast backup
   try {
     localStorage.setItem(STORAGE_ROOMS, JSON.stringify(state.rooms));
     localStorage.setItem(STORAGE_TASKS, JSON.stringify(state.tasks));
-  } catch (e) { console.warn('Save failed', e); }
+  } catch(e) {}
+  // Debounce Firestore writes (max once per 800 ms)
+  if (!currentHouseId) { setSyncStatus('offline'); return; }
+  setSyncStatus('saving');
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => {
+    db.collection('houses').doc(currentHouseId)
+      .update({ rooms: state.rooms, tasks: state.tasks })
+      .then(() => setSyncStatus('synced'))
+      .catch(e => { console.warn('Firestore save failed', e); setSyncStatus('offline'); });
+  }, 800);
 }
 
-function loadState() {
+function loadStateLocal() {
   try {
     const r = localStorage.getItem(STORAGE_ROOMS);
     const t = localStorage.getItem(STORAGE_TASKS);
     if (r) state.rooms = JSON.parse(r);
     if (t) state.tasks = JSON.parse(t);
-  } catch (e) { console.warn('Load failed', e); }
+  } catch(e) { console.warn('Load failed', e); }
 }
 
 function uid() {
@@ -86,6 +130,75 @@ function formatTime(mins) {
   const m = mins % 60;
   const hStr = hr === 1 ? '1 hour' : `${hr} hours`;
   return m === 0 ? hStr : `${hStr} ${m} mins`;
+}
+
+/** Compress an image data-URL to max 700px JPEG at 0.7 quality. */
+async function compressImage(dataUrl) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 700, canvas = document.createElement('canvas');
+      let { width: w, height: h } = img;
+      if (w > MAX || h > MAX) {
+        const ratio = MAX / Math.max(w, h);
+        w = Math.round(w * ratio); h = Math.round(h * ratio);
+      }
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', 0.7));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+/** Check if a string is a base64 data URL (not a remote URL). */
+function isDataUrl(str) {
+  return str && str.startsWith('data:');
+}
+
+/** Upload a base64 photo to Firebase Storage and return the download URL. */
+async function uploadTaskPhoto(taskId, dataUrl) {
+  if (!currentHouseId || !dataUrl) return null;
+  try {
+    const path = `houses/${currentHouseId}/tasks/${taskId}.jpg`;
+    const ref = storage.ref(path);
+    // Convert data URL to blob
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+    await ref.put(blob, { contentType: 'image/jpeg' });
+    return await ref.getDownloadURL();
+  } catch (e) {
+    console.warn('Photo upload failed', e);
+    return dataUrl; // fallback to keeping the data URL
+  }
+}
+
+/** Delete a task's photo from Firebase Storage. */
+async function deleteTaskPhoto(taskId) {
+  if (!currentHouseId) return;
+  try {
+    const path = `houses/${currentHouseId}/tasks/${taskId}.jpg`;
+    await storage.ref(path).delete();
+  } catch (e) {
+    // Ignore — file may not exist
+  }
+}
+
+/** Migrate any remaining base64 photos in state to Firebase Storage. */
+async function migrateBase64Photos() {
+  if (!currentHouseId) return;
+  let changed = false;
+  for (const task of state.tasks) {
+    if (isDataUrl(task.photo)) {
+      const url = await uploadTaskPhoto(task.id, task.photo);
+      if (url && !isDataUrl(url)) {
+        task.photo = url;
+        changed = true;
+      }
+    }
+  }
+  if (changed) saveState();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -149,7 +262,7 @@ function drawRooms(ctx, rooms, highlightIds = [], cellPx) {
     room.cells.forEach(({ r, c }) => {
       ctx.fillStyle = isHighlighted
         ? hexToRgba(room.color, 0.85)
-        : hexToRgba(room.color, 0.45);
+        : hexToRgba(room.color, 0.18);
       ctx.fillRect(c * px + 1, r * px + 1, px - 2, px - 2);
     });
 
@@ -159,12 +272,10 @@ function drawRooms(ctx, rooms, highlightIds = [], cellPx) {
     if (room.cells.length > 0 && px >= 20) {
       const cx = room.cells.reduce((s, {c}) => s + c, 0) / room.cells.length;
       const cy = room.cells.reduce((s, {r}) => s + r, 0) / room.cells.length;
-      ctx.font = `bold ${px < 26 ? 9 : 11}px Inter, sans-serif`;
+      const fontSize = px < 26 ? 9 : 11;
+      ctx.font = `bold ${fontSize}px Inter, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = '#fff';
-      ctx.shadowColor = 'rgba(0,0,0,0.55)';
-      ctx.shadowBlur = 3;
       const words = room.label.split(' ');
       const lines = [];
       let line = '';
@@ -174,11 +285,40 @@ function drawRooms(ctx, rooms, highlightIds = [], cellPx) {
         else { line = test; }
       });
       lines.push(line);
-      const lineH = 13;
+      const lineH = fontSize + 4;
+      const centerX = (cx + 0.5) * px;
+      const centerY = (cy + 0.5) * px;
+
+      // Measure the widest line for the background pill
+      let maxW = 0;
+      lines.forEach(l => { maxW = Math.max(maxW, ctx.measureText(l).width); });
+      const padX = 6, padY = 3;
+      const bgW = maxW + padX * 2;
+      const bgH = lines.length * lineH + padY * 2;
+      const bgX = centerX - bgW / 2;
+      const bgY = centerY - bgH / 2;
+
+      // Draw dark background pill
+      ctx.fillStyle = 'rgba(0,0,0,0.65)';
+      const pillR = 4;
+      ctx.beginPath();
+      ctx.moveTo(bgX + pillR, bgY);
+      ctx.lineTo(bgX + bgW - pillR, bgY);
+      ctx.quadraticCurveTo(bgX + bgW, bgY, bgX + bgW, bgY + pillR);
+      ctx.lineTo(bgX + bgW, bgY + bgH - pillR);
+      ctx.quadraticCurveTo(bgX + bgW, bgY + bgH, bgX + bgW - pillR, bgY + bgH);
+      ctx.lineTo(bgX + pillR, bgY + bgH);
+      ctx.quadraticCurveTo(bgX, bgY + bgH, bgX, bgY + bgH - pillR);
+      ctx.lineTo(bgX, bgY + pillR);
+      ctx.quadraticCurveTo(bgX, bgY, bgX + pillR, bgY);
+      ctx.closePath();
+      ctx.fill();
+
+      // Draw white text on the dark pill
+      ctx.fillStyle = '#ffffff';
       lines.forEach((l, i) => {
-        ctx.fillText(l, (cx + 0.5) * px, (cy + 0.5) * px + (i - (lines.length - 1) / 2) * lineH);
+        ctx.fillText(l, centerX, centerY + (i - (lines.length - 1) / 2) * lineH);
       });
-      ctx.shadowBlur = 0;
     }
   });
 }
@@ -265,6 +405,9 @@ const layoutEditor = (() => {
   // Is pointer currently down?
   let pointerDown = false;
 
+  // Floor plan overlay
+  let overlayImg = null;
+
   const btnDraw  = document.getElementById('btn-tool-draw');
   const btnMerge = document.getElementById('btn-tool-merge');
   const btnErase = document.getElementById('btn-tool-erase');
@@ -283,8 +426,36 @@ const layoutEditor = (() => {
     bindCanvasEvents();
     bindActionButtons();
     bindEditModeButton();
+    bindOverlayInput();
     canvas.classList.add('canvas-locked');
     renderAll();
+  }
+
+  function bindOverlayInput() {
+    const input = document.getElementById('overlay-img-input');
+    const clearBtn = document.getElementById('btn-overlay-clear');
+    input.addEventListener('change', () => {
+      const file = input.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = e => {
+        const img = new Image();
+        img.onload = () => {
+          overlayImg = img;
+          clearBtn.style.display = '';
+          renderAll();
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+      // Reset input so same file can be re-selected
+      input.value = '';
+    });
+    clearBtn.addEventListener('click', () => {
+      overlayImg = null;
+      clearBtn.style.display = 'none';
+      renderAll();
+    });
   }
 
   function bindEditModeButton() {
@@ -534,6 +705,16 @@ const layoutEditor = (() => {
   function renderAll() {
     const { w, h } = canvasSize();
     ctx.clearRect(0, 0, w, h);
+
+    // Draw floor plan overlay (only in edit mode, at 50% opacity)
+    if (editMode && overlayImg) {
+      ctx.save();
+      ctx.globalAlpha = 0.5;
+      // Fit the image to the canvas dimensions
+      ctx.drawImage(overlayImg, 0, 0, w, h);
+      ctx.restore();
+    }
+
     drawGrid(ctx);
     drawRooms(ctx, state.rooms, mergeSelected);
     drawTaskBadges(ctx, state.rooms, state.tasks);
@@ -781,10 +962,16 @@ const taskManager = (() => {
       img.className = 'task-thumb';
       img.src = task.photo;
       img.alt = task.name;
+      img.title = 'Tap to zoom';
+      // Clicking the thumbnail itself opens lightbox
+      img.addEventListener('click', e => {
+        e.stopPropagation();
+        openPhotoLightbox(task.photo);
+      });
       const expandBtn = document.createElement('button');
       expandBtn.className = 'task-thumb-expand';
       expandBtn.title = 'View photo';
-      expandBtn.textContent = '⤢';
+      expandBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="12" height="12"><circle cx="11" cy="11" r="7"/><line x1="16.5" y1="16.5" x2="22" y2="22"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>';
       expandBtn.addEventListener('click', e => {
         e.stopPropagation();
         openPhotoLightbox(task.photo);
@@ -850,7 +1037,7 @@ const taskManager = (() => {
     document.getElementById('modal-task').style.display = 'none';
   }
 
-  function saveTask() {
+  async function saveTask() {
     const name     = document.getElementById('task-name').value.trim();
     const duration = parseInt(document.getElementById('task-duration').value);
     const interval = parseInt(document.getElementById('task-interval').value);
@@ -859,7 +1046,10 @@ const taskManager = (() => {
     if (isNaN(duration) || duration < 1) { showAlert('Enter a valid duration.'); return; }
     if (isNaN(interval) || interval < 1) { showAlert('Enter a valid interval.'); return; }
 
+    let taskId;
+
     if (editingTaskId) {
+      taskId = editingTaskId;
       const task = state.tasks.find(t => t.id === editingTaskId);
       if (task) {
         task.name = name;
@@ -868,8 +1058,9 @@ const taskManager = (() => {
         if (photoDataUrl !== undefined) task.photo = photoDataUrl;
       }
     } else {
+      taskId = uid();
       state.tasks.push({
-        id: uid(),
+        id: taskId,
         roomId: selectedRoomId,
         name,
         durationMins: duration,
@@ -879,15 +1070,32 @@ const taskManager = (() => {
       });
     }
 
+    // Upload base64 photo to Firebase Storage if needed
+    const task = state.tasks.find(t => t.id === taskId);
+    if (task && isDataUrl(task.photo)) {
+      closeTaskModal();
+      renderList();
+      renderCanvas();
+      // Upload in background, then update URL
+      const downloadUrl = await uploadTaskPhoto(taskId, task.photo);
+      if (downloadUrl && !isDataUrl(downloadUrl)) {
+        task.photo = downloadUrl;
+      }
+    } else {
+      closeTaskModal();
+      renderList();
+      renderCanvas();
+    }
+
     saveState();
-    closeTaskModal();
     renderList();
-    renderCanvas();
     layoutEditor.renderAll();
   }
 
-  function deleteTask() {
+  async function deleteTask() {
     if (!editingTaskId) return;
+    // Delete photo from Storage
+    deleteTaskPhoto(editingTaskId);
     state.tasks = state.tasks.filter(t => t.id !== editingTaskId);
     saveState();
     closeTaskModal();
@@ -902,8 +1110,8 @@ const taskManager = (() => {
       const file = input.files[0];
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = e => {
-        photoDataUrl = e.target.result;
+      reader.onload = async e => {
+        photoDataUrl = await compressImage(e.target.result);
         const preview = document.getElementById('task-photo-preview');
         preview.src = photoDataUrl;
         preview.style.display = '';
@@ -927,6 +1135,7 @@ const taskManager = (() => {
 
 const cleanNow = (() => {
   const resultsEl = document.getElementById('clean-results');
+  let cleanMode = 'time'; // 'time' | 'urgent'
 
   function init() {
     const timeInput = document.getElementById('avail-time');
@@ -945,6 +1154,21 @@ const cleanNow = (() => {
     updateSlider(); // set initial track fill
 
     document.getElementById('btn-go-clean').addEventListener('click', run);
+
+    // Mode toggle
+    document.querySelectorAll('.clean-mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        cleanMode = btn.dataset.mode;
+        document.querySelectorAll('.clean-mode-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const isTime = cleanMode === 'time';
+        document.getElementById('time-mode-panel').style.display = isTime ? '' : 'none';
+        document.getElementById('urgent-mode-panel').style.display = isTime ? 'none' : '';
+        // Auto-run urgent mode immediately
+        if (!isTime) runUrgent();
+        else resultsEl.innerHTML = ''; // clear previous results
+      });
+    });
   }
 
   function run() {
@@ -1063,6 +1287,82 @@ const cleanNow = (() => {
       }
     }
     saveState();
+  }
+
+  // ── Most Urgent mode ─────────────────────────────
+  function runUrgent() {
+    resultsEl.innerHTML = '';
+
+    if (state.tasks.length === 0) {
+      resultsEl.innerHTML = '<div class="empty-state"><div class="empty-icon">🏠</div><p>No tasks yet!<br>Go to Layout → Tasks to add cleaning tasks.</p></div>';
+      return;
+    }
+
+    const scored = state.tasks.map(task => ({
+      task,
+      urgency: daysSince(task.lastCleaned) / task.intervalDays,
+    }))
+    .filter(({ urgency }) => urgency >= 0.5)
+    .sort((a, b) => b.urgency - a.urgency);
+
+    if (scored.length === 0) {
+      resultsEl.innerHTML = '<div class="empty-state"><div class="empty-icon">🎉</div><p>Everything is freshly cleaned!<br>Nothing needs attention right now.</p></div>';
+      return;
+    }
+
+    // Header pill
+    const header = document.createElement('div');
+    header.id = 'clean-summary';
+    const overdueCount = scored.filter(s => s.urgency >= 1).length;
+    const dueSoonCount = scored.length - overdueCount;
+    header.innerHTML = `
+      <span><strong>${scored.length}</strong> task${scored.length !== 1 ? 's' : ''} need attention</span>
+      <span>${overdueCount > 0 ? `<span style="color:#e5372b;font-weight:700">${overdueCount} overdue</span>` : `<span style="color:#d97706;font-weight:700">${dueSoonCount} due soon</span>`}</span>`;
+    resultsEl.appendChild(header);
+
+    scored.forEach(({ task, urgency }) => {
+      const room = state.rooms.find(r => r.id === task.roomId);
+      const card = document.createElement('div');
+      card.className = 'clean-task-card' + (urgency >= 1 ? ' urgent-card' : '');
+      card.dataset.taskId = task.id;
+
+      // Urgency strip
+      const strip = document.createElement('div');
+      strip.className = 'urgency-strip';
+      strip.style.background = urgency >= 1 ? '#ff453a' : urgency >= 0.75 ? '#ffd60a' : '#30d158';
+      card.appendChild(strip);
+
+      const check = document.createElement('div');
+      check.className = 'task-check';
+      check.addEventListener('click', e => {
+        e.stopPropagation();
+        toggleDone(task.id, card, check);
+        // Re-run urgent after short delay to re-sort
+        setTimeout(runUrgent, 600);
+      });
+
+      const info = document.createElement('div');
+      info.className = 'clean-task-info';
+
+      const daysOverdue = Math.round(daysSince(task.lastCleaned) - task.intervalDays);
+      const urgencyStr = urgency >= 1
+        ? `🔴 Overdue by ${daysOverdue > 0 ? daysOverdue + 'd' : 'today'}`
+        : urgency >= 0.75 ? '🟡 Due soon'
+        : '🟢 Scheduled';
+
+      info.innerHTML = `
+        <div class="clean-task-name">${escHtml(task.name)}</div>
+        <div class="clean-task-sub">${room ? room.label : 'Unknown room'} · ${urgencyStr}</div>`;
+
+      const dur = document.createElement('div');
+      dur.className = 'clean-task-duration';
+      dur.textContent = formatTime(task.durationMins);
+
+      card.appendChild(check);
+      card.appendChild(info);
+      card.appendChild(dur);
+      resultsEl.appendChild(card);
+    });
   }
 
   return { init };
@@ -1376,43 +1676,367 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
   btn.addEventListener('click', () => switchView(btn.dataset.view));
 });
 
-// ── Photo Lightbox ────────────────────────────────
+// ── Photo Lightbox (double-tap to zoom) ──────────────────────────
 function openPhotoLightbox(src) {
-  document.getElementById('modal-photo-img').src = src;
+  const img = document.getElementById('modal-photo-img');
+  img.src = src;
+  img.style.transform = '';
+  img.classList.remove('zoomed');
   document.getElementById('modal-photo').style.display = '';
 }
 
 function initPhotoLightbox() {
   const modal = document.getElementById('modal-photo');
-  document.getElementById('modal-photo-close').addEventListener('click', () => {
+  const img   = document.getElementById('modal-photo-img');
+  const closeIt = () => {
     modal.style.display = 'none';
-  });
-  modal.addEventListener('click', e => {
-    if (e.target === modal) modal.style.display = 'none';
+    img.style.transform = '';
+    img.classList.remove('zoomed');
+  };
+  document.getElementById('modal-photo-close').addEventListener('click', closeIt);
+  modal.addEventListener('click', e => { if (e.target === modal) closeIt(); });
+  // Double-tap zoom toggle
+  let lastTap = 0;
+  img.addEventListener('click', () => {
+    const now = Date.now();
+    if (now - lastTap < 320) {
+      const zoomed = img.classList.toggle('zoomed');
+      img.style.transform = zoomed ? 'scale(2.2)' : '';
+    }
+    lastTap = now;
   });
 }
 
 // ── Live Countdown Timer ──────────────────────────────────────────
 let liveTimer;
-
 function startLiveTimer() {
   if (liveTimer) clearInterval(liveTimer);
   liveTimer = setInterval(() => {
     const activeView = document.querySelector('.view.active').id;
     if (activeView === 'view-tasks') taskManager.refresh();
     else if (activeView === 'view-progress') progressTab.render();
-  }, 60000); // refresh every minute
+  }, 60000);
 }
 
-// ── Boot ──────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────
+// Firebase Auth, House & Sharing
+// ─────────────────────────────────────────────────────────────────
+
+// ── ensureHouseExists: 3-tier lookup so existing AND new users both work.
+async function ensureHouseExists(user) {
+  const userMetaRef = db.collection('userMeta').doc(user.uid);
+
+  // Tier 1: userMeta pointer (fastest — preferred path for returning users)
+  try {
+    const userMetaDoc = await userMetaRef.get();
+    if (userMetaDoc.exists && userMetaDoc.data().houseId) {
+      currentHouseId = userMetaDoc.data().houseId;
+      return;
+    }
+  } catch(e) {
+    // userMeta rules may not be published yet — continue to tier 2
+    console.warn('userMeta read failed, trying house query fallback:', e.message);
+  }
+
+  // Tier 2: query for an existing house where user is a member
+  // (handles users who had a house before userMeta was introduced)
+  try {
+    const snap = await db.collection('houses')
+      .where('members', 'array-contains', user.uid).limit(1).get();
+    if (!snap.empty) {
+      currentHouseId = snap.docs[0].id;
+      // Write the pointer now so tier 1 works next time
+      await userMetaRef.set({ houseId: currentHouseId }).catch(() => {});
+      return;
+    }
+  } catch(e) {
+    console.warn('House query fallback failed:', e.message);
+  }
+
+  // Tier 3: brand new user — create a house and migrate localStorage data
+  const rooms = JSON.parse(localStorage.getItem(STORAGE_ROOMS) || '[]');
+  const tasks = JSON.parse(localStorage.getItem(STORAGE_TASKS) || '[]');
+  const houseRef = db.collection('houses').doc();
+  await houseRef.set({
+    ownerId: user.uid,
+    members: [user.uid],
+    rooms,
+    tasks,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+  });
+  currentHouseId = houseRef.id;
+  await userMetaRef.set({ houseId: currentHouseId }).catch(() => {});
+  state.rooms = rooms;
+  state.tasks = tasks;
+}
+
+// ── Real-time listener: keeps state in sync across all devices.
+function subscribeToHouse() {
+  if (_unsubSnapshot) _unsubSnapshot(); // cancel any previous listener
+  _unsubSnapshot = db.collection('houses').doc(currentHouseId)
+    .onSnapshot(doc => {
+      if (!doc.exists) return;
+      const d = doc.data();
+      state.rooms = d.rooms || [];
+      state.tasks = d.tasks || [];
+      // Persist locally as backup
+      try {
+        localStorage.setItem(STORAGE_ROOMS, JSON.stringify(state.rooms));
+        localStorage.setItem(STORAGE_TASKS, JSON.stringify(state.tasks));
+      } catch(e) {}
+      setSyncStatus('synced');
+      // Refresh all views
+      layoutEditor.renderAll();
+      layoutEditor.renderChips();
+      taskManager.refresh();
+      const activeView = document.querySelector('.view.active');
+      if (activeView && activeView.id === 'view-progress') progressTab.render();
+      if (activeView && activeView.id === 'view-clean') cleanNow.render();
+    }, err => {
+      console.warn('Firestore snapshot error:', err);
+      setSyncStatus('offline');
+    });
+}
+
+async function handleAuthState(user) {
+  const loginEl   = document.getElementById('login-screen');
+  const loadingEl = document.getElementById('loading-overlay');
+
+  // Cancel any previous real-time listener
+  if (_unsubSnapshot) { _unsubSnapshot(); _unsubSnapshot = null; }
+
+  if (user) {
+    currentUser = user;
+    try {
+      // Save/update profile for invite-by-email lookup
+      await db.collection('userProfiles').doc(user.uid).set({
+        email: (user.email || '').toLowerCase(),
+        displayName: user.displayName || '',
+      }, { merge: true });
+
+      await ensureHouseExists(user);
+
+      // Start the real-time listener — it will populate state and render
+      subscribeToHouse();
+
+      // Migrate any legacy base64 photos to Firebase Storage (runs once, in background)
+      setTimeout(() => migrateBase64Photos(), 2000);
+
+    } catch (e) {
+      console.warn('Firestore setup failed, falling back to localStorage:', e);
+      loadStateLocal();
+      setSyncStatus('offline');
+      layoutEditor.renderAll();
+      layoutEditor.renderChips();
+      taskManager.refresh();
+    }
+
+    updateUserUI(user);
+    loginEl.classList.add('hidden');
+    loadingEl.classList.add('hidden');
+  } else {
+    currentUser = null; currentHouseId = null;
+    setSyncStatus('offline');
+    loginEl.classList.remove('hidden');
+    loadingEl.classList.add('hidden');
+  }
+}
+
+function updateUserUI(user) {
+  const initStr = (user.displayName || user.email || '?')
+    .split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+  document.getElementById('user-avatar-initials').textContent = initStr;
+  document.getElementById('user-name-short').textContent =
+    (user.displayName || user.email || '').split(' ')[0];
+  document.getElementById('btn-user-menu').classList.add('visible');
+  document.getElementById('dropdown-name').textContent  = user.displayName || '';
+  document.getElementById('dropdown-email').textContent = user.email || '';
+  // Show/hide Share vs Leave House based on whether this user is the owner
+  updateShareLeaveVisibility();
+}
+
+function updateShareLeaveVisibility() {
+  // We need the house doc to know if user is owner, but we can cache it
+  // For now use a quick Firestore read and update the dropdown
+  if (!currentHouseId || !currentUser) return;
+  db.collection('houses').doc(currentHouseId).get().then(doc => {
+    if (!doc.exists) return;
+    const isOwner = doc.data().ownerId === currentUser.uid;
+    const shareBtn = document.getElementById('btn-share-house');
+    const leaveBtn = document.getElementById('btn-leave-house');
+    if (shareBtn) shareBtn.style.display = isOwner ? '' : 'none';
+    if (leaveBtn) leaveBtn.style.display = isOwner ? 'none' : '';
+  }).catch(() => {});
+}
+
+function initAuthUI() {
+  document.getElementById('btn-google-signin').addEventListener('click', async () => {
+    try {
+      await auth.signInWithPopup(new firebase.auth.GoogleAuthProvider());
+    } catch(e) { showAlert('Sign-in failed: ' + (e.message || 'Unknown error')); }
+  });
+
+  const menuBtn  = document.getElementById('btn-user-menu');
+  const dropdown = document.getElementById('user-dropdown');
+  menuBtn.addEventListener('click', e => { e.stopPropagation(); dropdown.classList.toggle('hidden'); });
+  document.addEventListener('click', () => dropdown.classList.add('hidden'));
+
+  document.getElementById('btn-sign-out').addEventListener('click', () => {
+    dropdown.classList.add('hidden');
+    auth.signOut();
+  });
+
+  document.getElementById('btn-leave-house').addEventListener('click', async () => {
+    dropdown.classList.add('hidden');
+    if (!confirm('Are you sure you want to leave this house? You will lose access to all shared data.')) return;
+    await leaveHouse();
+  });
+
+  document.getElementById('btn-share-house').addEventListener('click', () => {
+    dropdown.classList.add('hidden');
+    openShareModal();
+  });
+  document.getElementById('btn-share-cancel').addEventListener('click', () => {
+    document.getElementById('modal-share').style.display = 'none';
+  });
+  document.getElementById('btn-share-invite').addEventListener('click', async () => {
+    const email = document.getElementById('share-email-input').value.trim();
+    if (!email) { showAlert('Please enter an email address.'); return; }
+    const btn = document.getElementById('btn-share-invite');
+    btn.textContent = 'Inviting…';
+    await shareHouseWithEmail(email);
+    btn.textContent = 'Invite';
+    document.getElementById('share-email-input').value = '';
+    loadShareMembers();
+  });
+}
+
+async function openShareModal() {
+  document.getElementById('modal-share').style.display = '';
+  document.getElementById('share-email-input').value = '';
+  await loadShareMembers();
+}
+
+async function loadShareMembers() {
+  const el = document.getElementById('share-members-list');
+  el.innerHTML = '<span style="color:var(--text3);font-size:12px">Loading members…</span>';
+  const houseDoc = await db.collection('houses').doc(currentHouseId).get();
+  const house    = houseDoc.data();
+  const members  = house.members || [];
+  el.innerHTML = '<div style="font-size:11px;font-weight:700;color:var(--text2);margin:10px 0 6px;text-transform:uppercase;letter-spacing:.5px">Members</div>';
+  for (const uid of members) {
+    const pDoc    = await db.collection('userProfiles').doc(uid).get();
+    const profile = pDoc.exists ? pDoc.data() : {};
+    const initials = (profile.displayName || profile.email || '?')
+      .split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+    const row = document.createElement('div');
+    row.className = 'share-member-row';
+    const isOwner = uid === house.ownerId;
+    const isCurrentUser = uid === currentUser.uid;
+    // Show remove button for members (non-owner) if current user is owner,
+    // or a Leave button if this row is the current (non-owner) user
+    let actionHtml = `<span class="share-member-badge">${isOwner ? 'Owner' : 'Member'}</span>`;
+    if (!isOwner && isCurrentUser) {
+      // Current user is a non-owner member — show Leave button
+      actionHtml = `<button class="share-member-leave-btn" data-uid="${uid}">Leave</button>`;
+    } else if (!isOwner && house.ownerId === currentUser.uid) {
+      // Current user is the owner — show Remove button for other members
+      actionHtml = `<span class="share-member-badge">Member</span>
+        <button class="share-member-remove-btn" data-uid="${uid}" title="Remove member">✕</button>`;
+    }
+    row.innerHTML = `
+      <div class="share-member-avatar">${initials}</div>
+      <div class="share-member-info">
+        <div class="share-member-name">${profile.displayName || 'Unknown'}</div>
+        <div class="share-member-email">${profile.email || uid}</div>
+      </div>
+      ${actionHtml}`;
+    el.appendChild(row);
+  }
+  // Bind Leave buttons
+  el.querySelectorAll('.share-member-leave-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm('Are you sure you want to leave this house? You will lose access to all shared data.')) return;
+      btn.textContent = 'Leaving…';
+      btn.disabled = true;
+      await leaveHouse();
+    });
+  });
+  // Bind Remove buttons (owner removing a member)
+  el.querySelectorAll('.share-member-remove-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const targetUid = btn.dataset.uid;
+      if (!confirm('Remove this member from the house?')) return;
+      btn.textContent = '…';
+      btn.disabled = true;
+      await db.collection('houses').doc(currentHouseId).update({
+        members: firebase.firestore.FieldValue.arrayRemove(targetUid),
+      });
+      // Remove userMeta pointer for the removed user (best-effort)
+      await db.collection('userMeta').doc(targetUid).delete().catch(() => {});
+      await loadShareMembers();
+    });
+  });
+}
+
+async function leaveHouse() {
+  try {
+    // Remove this user from the house members list
+    await db.collection('houses').doc(currentHouseId).update({
+      members: firebase.firestore.FieldValue.arrayRemove(currentUser.uid),
+    });
+    // Delete the userMeta pointer so ensureHouseExists creates a fresh house
+    await db.collection('userMeta').doc(currentUser.uid).delete().catch(() => {});
+  } catch (e) {
+    console.warn('leaveHouse error:', e);
+  }
+  // Unsubscribe from the old house listener
+  if (_unsubSnapshot) { _unsubSnapshot(); _unsubSnapshot = null; }
+  currentHouseId = null;
+  // Clear local state
+  state.rooms = []; state.tasks = [];
+  localStorage.removeItem(STORAGE_ROOMS);
+  localStorage.removeItem(STORAGE_TASKS);
+  document.getElementById('modal-share').style.display = 'none';
+  // Re-run ensureHouseExists to get (or create) a new house for this user
+  try {
+    await ensureHouseExists(currentUser);
+    subscribeToHouse();
+    showAlert('You have left the house. A new personal house has been created for you.');
+  } catch (e) {
+    console.warn('Post-leave house setup failed:', e);
+    showAlert('You have left the house. Please reload the app.');
+  }
+}
+
+async function shareHouseWithEmail(email) {
+  const normalized = email.trim().toLowerCase();
+  const snap = await db.collection('userProfiles')
+    .where('email', '==', normalized).limit(1).get();
+  if (snap.empty) {
+    showAlert(`No CleanHome account found for "${email}".\nThey must sign in to CleanHome first.`);
+    return;
+  }
+  const targetUid = snap.docs[0].id;
+  if (targetUid === currentUser.uid) { showAlert("That's your own account!"); return; }
+  await db.collection('houses').doc(currentHouseId).update({
+    members: firebase.firestore.FieldValue.arrayUnion(targetUid),
+  });
+  showAlert(`✅ House shared with ${email}!`);
+}
+
+// ── Boot ──────────────────────────────────────────────────────────
 function boot() {
-  loadState();
   layoutEditor.init();
   taskManager.init();
   cleanNow.init();
   progressTab.init();
   initPhotoLightbox();
+  initAuthUI();
   startLiveTimer();
+  // Auth gates the app — shows loading until user status is known
+  auth.onAuthStateChanged(user => handleAuthState(user));
 }
 
 document.addEventListener('DOMContentLoaded', boot);
+
