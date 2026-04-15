@@ -393,7 +393,7 @@ const layoutEditor = (() => {
   const canvas = document.getElementById('floor-canvas');
   let ctx;
 
-  // Current tool: 'draw' | 'merge' | 'erase' | 'label'
+  // Current tool: 'draw' | 'merge' | 'erase' | 'label' | 'move'
   let activeTool = 'draw';
 
   // Cells being painted in current stroke
@@ -408,15 +408,26 @@ const layoutEditor = (() => {
   // Floor plan overlay
   let overlayImg = null;
 
+  // Overlay transform state
+  let overlayScale   = 1.0;   // 1.0 = 100%
+  let overlayOpacity = 0.5;   // 0–1
+  let overlayX       = 0;     // px offset
+  let overlayY       = 0;     // px offset
+  let overlayCrop    = true;  // clip to canvas bounds
+  // For drag-move
+  let moveDragStart  = null;  // { x, y, startOX, startOY }
+
   const btnDraw  = document.getElementById('btn-tool-draw');
   const btnMerge = document.getElementById('btn-tool-merge');
   const btnErase = document.getElementById('btn-tool-erase');
   const btnLabel = document.getElementById('btn-tool-label');
+  const btnMove  = document.getElementById('btn-tool-move');
   const btnSave  = document.getElementById('btn-save-room');
   const btnClear = document.getElementById('btn-clear-selection');
   const btnDel   = document.getElementById('btn-delete-room');
   const btnEditMode = document.getElementById('btn-edit-mode');
   const toolbar  = document.getElementById('layout-toolbar');
+  const overlayControlsEl = document.getElementById('overlay-controls');
   const chipsEl  = document.getElementById('room-chips');
   let editMode   = false;
 
@@ -431,9 +442,63 @@ const layoutEditor = (() => {
     renderAll();
   }
 
+  // ── Overlay controls helpers ─────────────────────
+
+  function showOverlayControls() {
+    overlayControlsEl.classList.remove('overlay-controls-hidden');
+    btnMove.style.display = '';
+  }
+  function hideOverlayControls() {
+    overlayControlsEl.classList.add('overlay-controls-hidden');
+    btnMove.style.display = 'none';
+    if (activeTool === 'move') setTool('draw');
+  }
+
+  function resetOverlayTransform() {
+    overlayScale = 1.0;
+    overlayOpacity = 0.5;
+    overlayX = 0;
+    overlayY = 0;
+    syncOverlaySliders();
+    renderAll();
+  }
+
+  function fitOverlayToCanvas() {
+    if (!overlayImg) return;
+    const { w, h } = canvasSize();
+    const scaleW = w / overlayImg.naturalWidth;
+    const scaleH = h / overlayImg.naturalHeight;
+    overlayScale = Math.min(scaleW, scaleH);
+    overlayX = 0;
+    overlayY = 0;
+    syncOverlaySliders();
+    renderAll();
+  }
+
+  function syncOverlaySliders() {
+    const scaleSlider   = document.getElementById('overlay-scale');
+    const opacitySlider = document.getElementById('overlay-opacity');
+    const xSlider       = document.getElementById('overlay-x');
+    const ySlider       = document.getElementById('overlay-y');
+    const cropCheck     = document.getElementById('overlay-crop-check');
+
+    scaleSlider.value   = Math.round(overlayScale * 100);
+    opacitySlider.value = Math.round(overlayOpacity * 100);
+    xSlider.value       = Math.round(overlayX);
+    ySlider.value       = Math.round(overlayY);
+    cropCheck.checked   = overlayCrop;
+
+    document.getElementById('overlay-scale-val').textContent   = Math.round(overlayScale * 100) + '%';
+    document.getElementById('overlay-opacity-val').textContent  = Math.round(overlayOpacity * 100) + '%';
+    document.getElementById('overlay-x-val').textContent        = Math.round(overlayX);
+    document.getElementById('overlay-y-val').textContent        = Math.round(overlayY);
+  }
+
   function bindOverlayInput() {
-    const input = document.getElementById('overlay-img-input');
+    const input    = document.getElementById('overlay-img-input');
     const clearBtn = document.getElementById('btn-overlay-clear');
+
+    // Upload handler
     input.addEventListener('change', () => {
       const file = input.files[0];
       if (!file) return;
@@ -443,18 +508,67 @@ const layoutEditor = (() => {
         img.onload = () => {
           overlayImg = img;
           clearBtn.style.display = '';
+          resetOverlayTransform();
+          fitOverlayToCanvas();
+          showOverlayControls();
           renderAll();
         };
         img.src = e.target.result;
       };
       reader.readAsDataURL(file);
-      // Reset input so same file can be re-selected
       input.value = '';
     });
+
+    // Clear handler
     clearBtn.addEventListener('click', () => {
       overlayImg = null;
       clearBtn.style.display = 'none';
+      hideOverlayControls();
       renderAll();
+    });
+
+    // Scale slider
+    document.getElementById('overlay-scale').addEventListener('input', e => {
+      overlayScale = parseInt(e.target.value) / 100;
+      document.getElementById('overlay-scale-val').textContent = e.target.value + '%';
+      renderAll();
+    });
+
+    // Opacity slider
+    document.getElementById('overlay-opacity').addEventListener('input', e => {
+      overlayOpacity = parseInt(e.target.value) / 100;
+      document.getElementById('overlay-opacity-val').textContent = e.target.value + '%';
+      renderAll();
+    });
+
+    // X slider
+    document.getElementById('overlay-x').addEventListener('input', e => {
+      overlayX = parseInt(e.target.value);
+      document.getElementById('overlay-x-val').textContent = e.target.value;
+      renderAll();
+    });
+
+    // Y slider
+    document.getElementById('overlay-y').addEventListener('input', e => {
+      overlayY = parseInt(e.target.value);
+      document.getElementById('overlay-y-val').textContent = e.target.value;
+      renderAll();
+    });
+
+    // Crop checkbox
+    document.getElementById('overlay-crop-check').addEventListener('change', e => {
+      overlayCrop = e.target.checked;
+      renderAll();
+    });
+
+    // Fit button
+    document.getElementById('btn-overlay-fit').addEventListener('click', () => {
+      fitOverlayToCanvas();
+    });
+
+    // Reset button
+    document.getElementById('btn-overlay-reset').addEventListener('click', () => {
+      resetOverlayTransform();
     });
   }
 
@@ -472,7 +586,9 @@ const layoutEditor = (() => {
         btnEditMode.textContent = '✏️ Edit Layout';
         btnEditMode.classList.remove('editing');
         toolbar.classList.add('toolbar-hidden');
+        hideOverlayControls();
         canvas.classList.add('canvas-locked');
+        canvas.classList.remove('tool-move');
         pendingCells.clear();
         mergeSelected = [];
         btnSave.style.display = 'none';
@@ -487,8 +603,14 @@ const layoutEditor = (() => {
     activeTool = tool;
     pendingCells.clear();
     mergeSelected = [];
-    [btnDraw, btnMerge, btnErase, btnLabel].forEach(b => b.classList.remove('active'));
-    ({ draw: btnDraw, merge: btnMerge, erase: btnErase, label: btnLabel })[tool].classList.add('active');
+    [btnDraw, btnMerge, btnErase, btnLabel, btnMove].forEach(b => b.classList.remove('active'));
+    ({ draw: btnDraw, merge: btnMerge, erase: btnErase, label: btnLabel, move: btnMove })[tool]?.classList.add('active');
+    // Toggle move cursor
+    if (tool === 'move') {
+      canvas.classList.add('tool-move');
+    } else {
+      canvas.classList.remove('tool-move');
+    }
     updateActionButtons();
     renderAll();
   }
@@ -498,6 +620,7 @@ const layoutEditor = (() => {
     btnMerge.addEventListener('click', () => setTool('merge'));
     btnErase.addEventListener('click', () => setTool('erase'));
     btnLabel.addEventListener('click', () => setTool('label'));
+    btnMove.addEventListener('click',  () => setTool('move'));
   }
 
   function bindCanvasEvents() {
@@ -512,6 +635,18 @@ const layoutEditor = (() => {
     e.preventDefault();
     pointerDown = true;
     canvas.setPointerCapture(e.pointerId);
+
+    if (activeTool === 'move' && overlayImg) {
+      const rect = canvas.getBoundingClientRect();
+      moveDragStart = {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+        startOX: overlayX,
+        startOY: overlayY,
+      };
+      return;
+    }
+
     const { r, c } = pointerToCell(canvas, e);
     handleCellInteraction(r, c);
   }
@@ -519,13 +654,28 @@ const layoutEditor = (() => {
   function onPointerMove(e) {
     e.preventDefault();
     if (!pointerDown) return;
+
+    if (activeTool === 'move' && moveDragStart) {
+      const rect = canvas.getBoundingClientRect();
+      const dx = (e.clientX - rect.left) - moveDragStart.x;
+      const dy = (e.clientY - rect.top) - moveDragStart.y;
+      overlayX = moveDragStart.startOX + dx;
+      overlayY = moveDragStart.startOY + dy;
+      syncOverlaySliders();
+      renderAll();
+      return;
+    }
+
     const { r, c } = pointerToCell(canvas, e);
     if (activeTool === 'draw' || activeTool === 'erase') {
       handleCellInteraction(r, c);
     }
   }
 
-  function onPointerUp() { pointerDown = false; }
+  function onPointerUp() {
+    pointerDown = false;
+    moveDragStart = null;
+  }
 
   function handleCellInteraction(r, c) {
     const key = cellKey(r, c);
@@ -706,12 +856,23 @@ const layoutEditor = (() => {
     const { w, h } = canvasSize();
     ctx.clearRect(0, 0, w, h);
 
-    // Draw floor plan overlay (only in edit mode, at 50% opacity)
+    // Draw floor plan overlay (only in edit mode, with transform controls)
     if (editMode && overlayImg) {
       ctx.save();
-      ctx.globalAlpha = 0.5;
-      // Fit the image to the canvas dimensions
-      ctx.drawImage(overlayImg, 0, 0, w, h);
+      ctx.globalAlpha = overlayOpacity;
+
+      // Optionally clip to canvas bounds
+      if (overlayCrop) {
+        ctx.beginPath();
+        ctx.rect(0, 0, w, h);
+        ctx.clip();
+      }
+
+      // Compute the rendered image size
+      const imgW = overlayImg.naturalWidth * overlayScale;
+      const imgH = overlayImg.naturalHeight * overlayScale;
+
+      ctx.drawImage(overlayImg, overlayX, overlayY, imgW, imgH);
       ctx.restore();
     }
 
