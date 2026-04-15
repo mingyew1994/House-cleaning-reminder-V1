@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=9" />
+  <link rel="stylesheet" href="style.css?v=10" />
 </head>
 <body>
   <!-- ─── App Shell ─────────────────────────────────── -->
@@ -50,7 +50,39 @@
         <div class="toolbar-divider"></div>
         <label class="tool-btn" id="btn-overlay-upload" for="overlay-img-input" title="Upload floor plan to trace over">🖼 Floor Plan</label>
         <input type="file" id="overlay-img-input" accept="image/*" style="display:none" />
-        <button class="tool-btn" id="btn-overlay-clear" title="Remove floor plan overlay" style="display:none">✕ Clear Overlay</button>
+        <button class="tool-btn" id="btn-overlay-clear" title="Remove floor plan overlay" style="display:none">✕ Clear</button>
+        <button class="tool-btn" id="btn-tool-move" title="Drag to reposition the overlay image" style="display:none">✋ Move</button>
+      </div>
+
+      <!-- Overlay image controls (visible when floor plan loaded) -->
+      <div id="overlay-controls" class="overlay-controls-hidden">
+        <div class="overlay-ctrl-row">
+          <label class="overlay-ctrl-label">Scale</label>
+          <input type="range" id="overlay-scale" min="10" max="300" step="1" value="100" class="overlay-slider" />
+          <span class="overlay-ctrl-value" id="overlay-scale-val">100%</span>
+        </div>
+        <div class="overlay-ctrl-row">
+          <label class="overlay-ctrl-label">Opacity</label>
+          <input type="range" id="overlay-opacity" min="10" max="90" step="5" value="50" class="overlay-slider" />
+          <span class="overlay-ctrl-value" id="overlay-opacity-val">50%</span>
+        </div>
+        <div class="overlay-ctrl-row">
+          <label class="overlay-ctrl-label">X</label>
+          <input type="range" id="overlay-x" min="-500" max="500" step="1" value="0" class="overlay-slider" />
+          <span class="overlay-ctrl-value" id="overlay-x-val">0</span>
+        </div>
+        <div class="overlay-ctrl-row">
+          <label class="overlay-ctrl-label">Y</label>
+          <input type="range" id="overlay-y" min="-500" max="500" step="1" value="0" class="overlay-slider" />
+          <span class="overlay-ctrl-value" id="overlay-y-val">0</span>
+        </div>
+        <div class="overlay-ctrl-actions">
+          <button class="overlay-action-btn" id="btn-overlay-fit" title="Fit image to canvas">📐 Fit</button>
+          <button class="overlay-action-btn" id="btn-overlay-reset" title="Reset to defaults">↺ Reset</button>
+          <label class="overlay-action-btn overlay-crop-toggle" id="btn-overlay-crop" title="Crop: only show image within grid bounds">
+            <input type="checkbox" id="overlay-crop-check" checked /> ✂ Crop
+          </label>
+        </div>
       </div>
 
       <!-- Canvas wrapper -->
@@ -254,6 +286,6 @@
   <script src="https://www.gstatic.com/firebasejs/11.0.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/11.0.0/firebase-storage-compat.js"></script>
-  <script src="app.js?v=9"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>
